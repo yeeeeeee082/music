@@ -1,52 +1,22 @@
-# ✅ main.py（OpenAI API 精簡版）
+# ✅ main.py（使用 OpenAI Vision 分析圖片並推薦音樂）
 from flask import Flask, request, render_template
 from PIL import Image
-import openai
-import os
-from dotenv import load_dotenv
-from werkzeug.utils import secure_filename
 import requests
+import os
 import base64
 from io import BytesIO
+from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
 
 # 環境變數
 load_dotenv()
 app = Flask(__name__)
-openai.api_key = os.getenv("OPENAI_API_KEY")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
-# ✅ 把圖片轉成 base64 給 OpenAI 分析
-
-def image_to_base64(image):
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-# ✅ 圖片情緒描述 + 標籤（用 GPT）
-
-def analyze_image_emotion(image):
-    base64_image = image_to_base64(image)
-    response = openai.ChatCompletion.create(
-        model="gpt-4-vision-preview",
-        messages=[
-            {"role": "system", "content": "你是一位具備藝術素養的詩意撰稿人。請描述圖片帶來的情緒與氛圍，並提供 3 個英文情緒標籤給音樂推薦使用。"},
-            {"role": "user", "content": [
-                {"type": "text", "text": "請幫我分析這張圖片的情緒並產生音樂標籤"},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
-            ]}
-        ],
-        max_tokens=300
-    )
-    text = response.choices[0].message.content.strip()
-    # 簡單拆出說明與標籤（以冒號分隔為準）
-    parts = text.split("標籤：")
-    description = parts[0].strip()
-    keywords = parts[1].split(',') if len(parts) > 1 else []
-    return description, [kw.strip() for kw in keywords]
-
-# ✅ Spotify 權杖
-
+# Spotify 權杖
 def get_spotify_token():
     r = requests.post(
         "https://accounts.spotify.com/api/token",
@@ -55,8 +25,7 @@ def get_spotify_token():
     )
     return r.json().get("access_token")
 
-# ✅ Spotify 音樂搜尋
-
+# Spotify 音樂搜尋
 def get_tracks_by_queries(queries, token, per_query=2):
     headers = {"Authorization": f"Bearer {token}"}
     tracks = []
@@ -78,7 +47,46 @@ def get_tracks_by_queries(queries, token, per_query=2):
                     })
     return tracks
 
-# ✅ 頁面
+# 呼叫 OpenAI Vision 分析圖片並產生情緒與推薦字詞
+def analyze_image_with_openai(image):
+    buffered = BytesIO()
+    image.save(buffered, format="JPEG")
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "gpt-4-vision-preview",
+        "messages": [
+            {"role": "system", "content": "你是一位藝術與音樂顧問，根據圖片給出情緒描述與適合的 Spotify 音樂搜尋關鍵字。"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "請描述這張圖片傳遞的情緒（中文），並產生 3 個適合在 Spotify 搜尋的音樂關鍵字（英文）"},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_str}"}}
+            ]}
+        ],
+        "max_tokens": 300
+    }
+
+    response = requests.post("https://api.openai.com/v1/chat/completions",
+                             headers=headers, json=data)
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
+    else:
+        return "圖片分析失敗。"
+
+# 擷取推薦字詞
+import re
+def extract_keywords_and_description(text):
+    lines = text.strip().split("\n")
+    description = lines[0]
+    keywords = re.findall(r'"(.*?)"|\b[a-zA-Z0-9\- ]+\b', " ".join(lines[1:]))
+    filtered = [kw.strip() for kw in keywords if kw.strip() and len(kw.strip().split()) <= 4]
+    return description, filtered[:3]
+
+# 頁面邏輯
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -92,7 +100,8 @@ def music():
             image = Image.open(file.stream).convert("RGB")
             image.thumbnail((512, 512))
             try:
-                description, queries = analyze_image_emotion(image)
+                raw_text = analyze_image_with_openai(image)
+                description, queries = extract_keywords_and_description(raw_text)
                 token = get_spotify_token()
                 tracks = get_tracks_by_queries(queries, token)
                 return render_template("result.html", description=description, tracks=tracks)
