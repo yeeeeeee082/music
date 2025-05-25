@@ -8,6 +8,7 @@ import requests
 import os
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
+import openai
 
 # 環境變數
 load_dotenv()
@@ -15,6 +16,9 @@ app = Flask(__name__)
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+openai.api_key = OPENAI_API_KEY
 
 # CLIP 設定
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -43,7 +47,6 @@ def get_image_features(image):
         return model.get_image_features(image)
 
 # 圖像情緒
-
 def get_top_emotions(image):
     emotion_labels = [
         "joyful", "cheerful", "melancholic", "gloomy", "furious", "relaxed",
@@ -60,34 +63,32 @@ def get_top_emotions(image):
     top_indices = similarity.topk(3).indices
     return [emotion_labels[i] for i in top_indices]
 
-# 使用 Ollama
-
+# 使用 OpenAI 產生描述
 def generate_emotion_description(emotions):
     prompt = (
         f"根據這些情緒標籤：{', '.join(emotions)}，請用一段優美、詩意的【中文】文字描述圖片的情緒與氛圍。"
         f"請避免任何英文詞彙，也不要中英夾雜。控制在 80~100 字以內，語氣溫柔、文藝，不要太誇張。"
     )
-    r = requests.post("http://localhost:11434/api/generate", json={
-        "model": "llama3.2:1b",
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.4
-        }
-    })
-    return r.json().get("response", "")
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "你是一位擅長描述藝術氣息與情緒氛圍的中文作家。"},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    return response.choices[0].message.content.strip()
 
+# 使用 OpenAI 產生音樂搜尋關鍵字
 def generate_spotify_queries(emotions):
     prompt = f"根據這些情緒：{', '.join(emotions)}，請產生3個適合在 Spotify 搜尋的音樂關鍵字或短語（用英文）。"
-    r = requests.post("http://localhost:11434/api/generate", json={
-        "model": "llama3.2:1b",
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.4
-        }
-    })
-    lines = r.json().get("response", "").split('\n')
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "你是一位擅長音樂風格與情緒分類的音樂顧問。"},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    lines = response.choices[0].message.content.strip().split('\n')
     return [line.strip('- ') for line in lines if line.strip()]
 
 # Spotify 音樂搜尋
