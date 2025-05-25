@@ -7,6 +7,7 @@ import base64
 from io import BytesIO
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
+import re
 
 # 環境變數
 load_dotenv()
@@ -16,7 +17,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
+# 檢查環境變數
+if not OPENAI_API_KEY:
+    raise ValueError("❌ OPENAI_API_KEY 未設定")
+if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+    raise ValueError("❌ Spotify 金鑰未設定")
+
 # Spotify 權杖
+
 def get_spotify_token():
     r = requests.post(
         "https://accounts.spotify.com/api/token",
@@ -26,6 +34,7 @@ def get_spotify_token():
     return r.json().get("access_token")
 
 # Spotify 音樂搜尋
+
 def get_tracks_by_queries(queries, token, per_query=2):
     headers = {"Authorization": f"Bearer {token}"}
     tracks = []
@@ -48,6 +57,7 @@ def get_tracks_by_queries(queries, token, per_query=2):
     return tracks
 
 # 呼叫 OpenAI Vision 分析圖片並產生情緒與推薦字詞
+
 def analyze_image_with_openai(image):
     buffered = BytesIO()
     image.save(buffered, format="JPEG")
@@ -78,7 +88,7 @@ def analyze_image_with_openai(image):
         return "圖片分析失敗。"
 
 # 擷取推薦字詞
-import re
+
 def extract_keywords_and_description(text):
     lines = text.strip().split("\n")
     description = lines[0]
@@ -87,16 +97,20 @@ def extract_keywords_and_description(text):
     return description, filtered[:3]
 
 # 頁面邏輯
+
 @app.route("/", methods=["GET", "HEAD"])
 def home():
     return render_template("index.html")
 
+@app.route("/music", methods=["GET", "POST"])
 def music():
     if request.method == "POST":
         file = request.files.get("image")
         if file:
-            filename = secure_filename(file.filename)
-            image = Image.open(file.stream).convert("RGB")
+            try:
+                image = Image.open(file.stream).convert("RGB")
+            except Exception:
+                return "無法讀取圖片格式，請上傳 JPEG 或 PNG"
             image.thumbnail((512, 512))
             try:
                 raw_text = analyze_image_with_openai(image)
