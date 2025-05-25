@@ -1,31 +1,52 @@
-# ✅ main.py
+# ✅ main.py（OpenAI API 精簡版）
 from flask import Flask, request, render_template
 from PIL import Image
-import torch
-from torchvision import transforms
-from transformers import CLIPProcessor, CLIPModel
-import requests
+import openai
 import os
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
-import openai
+import requests
+import base64
+from io import BytesIO
 
 # 環境變數
 load_dotenv()
 app = Flask(__name__)
-
+openai.api_key = os.getenv("OPENAI_API_KEY")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-openai.api_key = OPENAI_API_KEY
+# ✅ 把圖片轉成 base64 給 OpenAI 分析
 
-# CLIP 設定
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+def image_to_base64(image):
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-# Spotify 權杖
+# ✅ 圖片情緒描述 + 標籤（用 GPT）
+
+def analyze_image_emotion(image):
+    base64_image = image_to_base64(image)
+    response = openai.ChatCompletion.create(
+        model="gpt-4-vision-preview",
+        messages=[
+            {"role": "system", "content": "你是一位具備藝術素養的詩意撰稿人。請描述圖片帶來的情緒與氛圍，並提供 3 個英文情緒標籤給音樂推薦使用。"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "請幫我分析這張圖片的情緒並產生音樂標籤"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+            ]}
+        ],
+        max_tokens=300
+    )
+    text = response.choices[0].message.content.strip()
+    # 簡單拆出說明與標籤（以冒號分隔為準）
+    parts = text.split("標籤：")
+    description = parts[0].strip()
+    keywords = parts[1].split(',') if len(parts) > 1 else []
+    return description, [kw.strip() for kw in keywords]
+
+# ✅ Spotify 權杖
+
 def get_spotify_token():
     r = requests.post(
         "https://accounts.spotify.com/api/token",
@@ -34,64 +55,8 @@ def get_spotify_token():
     )
     return r.json().get("access_token")
 
-# 圖片處理
-def get_image_features(image):
-    preprocess = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
-                             (0.26862954, 0.26130258, 0.27577711))
-    ])
-    image = preprocess(image).unsqueeze(0).to(device)
-    with torch.no_grad():
-        return model.get_image_features(image)
+# ✅ Spotify 音樂搜尋
 
-# 圖像情緒
-def get_top_emotions(image):
-    emotion_labels = [
-        "joyful", "cheerful", "melancholic", "gloomy", "furious", "relaxed",
-        "peaceful", "romantic", "dreamy", "mysterious", "eerie", "vibrant",
-        "intense", "anxious", "nostalgic", "sentimental", "chill", "lo-fi",
-        "energetic", "calm", "hopeful", "lonely"
-    ]
-    prompts = [f"This image evokes a {mood} feeling" for mood in emotion_labels]
-    inputs = processor(text=prompts, return_tensors="pt", padding=True).to(device)
-    image_features = get_image_features(image)
-    with torch.no_grad():
-        text_features = model.get_text_features(**inputs)
-        similarity = torch.nn.functional.cosine_similarity(image_features, text_features)
-    top_indices = similarity.topk(3).indices
-    return [emotion_labels[i] for i in top_indices]
-
-# 使用 OpenAI 產生描述
-def generate_emotion_description(emotions):
-    prompt = (
-        f"根據這些情緒標籤：{', '.join(emotions)}，請用一段優美、詩意的【中文】文字描述圖片的情緒與氛圍。"
-        f"請避免任何英文詞彙，也不要中英夾雜。控制在 80~100 字以內，語氣溫柔、文藝，不要太誇張。"
-    )
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "你是一位擅長描述藝術氣息與情緒氛圍的中文作家。"},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return response.choices[0].message.content.strip()
-
-# 使用 OpenAI 產生音樂搜尋關鍵字
-def generate_spotify_queries(emotions):
-    prompt = f"根據這些情緒：{', '.join(emotions)}，請產生3個適合在 Spotify 搜尋的音樂關鍵字或短語（用英文）。"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "你是一位擅長音樂風格與情緒分類的音樂顧問。"},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    lines = response.choices[0].message.content.strip().split('\n')
-    return [line.strip('- ') for line in lines if line.strip()]
-
-# Spotify 音樂搜尋
 def get_tracks_by_queries(queries, token, per_query=2):
     headers = {"Authorization": f"Bearer {token}"}
     tracks = []
@@ -113,7 +78,7 @@ def get_tracks_by_queries(queries, token, per_query=2):
                     })
     return tracks
 
-# 頁面
+# ✅ 頁面
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -127,12 +92,10 @@ def music():
             image = Image.open(file.stream).convert("RGB")
             image.thumbnail((512, 512))
             try:
-                emotions = get_top_emotions(image)
-                description = generate_emotion_description(emotions)
-                queries = generate_spotify_queries(emotions)
+                description, queries = analyze_image_emotion(image)
                 token = get_spotify_token()
                 tracks = get_tracks_by_queries(queries, token)
-                return render_template("result.html", emotions=emotions, description=description, tracks=tracks)
+                return render_template("result.html", description=description, tracks=tracks)
             except Exception as e:
                 return f"發生錯誤：{str(e)}"
     return render_template("music.html")
