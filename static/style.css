@@ -1,0 +1,15 @@
+body {
+  background-color: #D7C4BB !important;
+  color: #333;
+}
+header, footer {
+  background-color: #D7C4BB !important;
+  color: white;
+  padding: 1rem 0;
+}
+h1, h2, h3 {
+  color: #8B7355;
+}
+a, .navbar-light .navbar-brand, .navbar-light .nav-link {
+  color: #8B7355 !important;
+}
