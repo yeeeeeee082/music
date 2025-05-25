@@ -87,11 +87,10 @@ def extract_keywords_and_description(text):
     return description, filtered[:3]
 
 # 頁面邏輯
-@app.route("/")
+@app.route("/", methods=["GET", "HEAD"])
 def home():
     return render_template("index.html")
 
-@app.route("/music", methods=["GET", "POST"])
 def music():
     if request.method == "POST":
         file = request.files.get("image")
